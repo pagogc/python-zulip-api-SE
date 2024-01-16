@@ -22,6 +22,7 @@ Vorlage für einen Thread mit allen wichtigen Informationen:
 Version: 7.00.403.xxxx
 Oberfläche: WebUi oder WinUi
 Datenbankformat: Classic oder Vectoring
+Mit Standardversion/Konfig geprüft: Ja/Nein 
 
 Kurzbeschreibung: Tragen Sie hier eine kurze Info zu dem Problem ein
 Beschreibung: Tragen Sie hier die komplette Beschreibung des Problems ein,
@@ -34,6 +35,7 @@ Vorlage zum kopieren
 Version: 
 Oberfläche: 
 Datenbankformat:
+Mit Standardversion/Konfig geprüft:
 
 Kurzbeschreibung: 
 Beschreibung: 
