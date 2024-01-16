@@ -57,3 +57,6 @@ botserverrc
 # Pycharm
 \.DS_Store
 \.idea/
+
+#own files
+config/
