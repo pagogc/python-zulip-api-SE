@@ -102,7 +102,7 @@ class JiraHandler:
     def handle_message(self, message: Dict[str, str], bot_handler: BotHandler) -> None:
 
         client = zulip.Client(config_file="~/python-zulip-api-SE/config/redmine_rc")
-        sender_id = message.get("id")
+        sender_id = message.get("sender_id")
         resultuser = client.get_user_by_id(sender_id)
         result = resultuser.get("user")
 
