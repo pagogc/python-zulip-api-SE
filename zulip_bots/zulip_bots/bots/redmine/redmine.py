@@ -59,6 +59,7 @@ class JiraHandler:
 
         redmine_token = config.get("redmine_token")
         zulip_url = config.get("domain")
+        allowed_users = config.get("allowed_users")
         if not redmine_url:
             raise KeyError("No `redmine_url` was specified")
         if not redmine_token:
@@ -68,6 +69,7 @@ class JiraHandler:
 
         self.redmine = redminelib.Redmine(redmine_url, key=redmine_token)
         self.zulip_url = zulip_url
+        self.allowed_userlist = allowed_users.split(',') 
 
     def jql_search(self, jql_query: str) -> str:
         unknown_val = "*unknown*"
@@ -115,21 +117,17 @@ class JiraHandler:
 
         logging.info("mail_of_sender: %s", mail_of_sender)
 
-        index = mail_of_sender.find("user43@support.teamzone.softengine.de") #ist daniel boos
-        if index == -1:
-            index = mail_of_sender.find("daniel.boos@standardsw.com") #ist daniel boos
-            if index == -1:
-                index = mail_of_sender.find("@softengine.de")
-                if index == -1:
-                    index = mail_of_sender.find("@softengine.at")
-                    if (index == -1):
-                        response = "Sorry, ich kann nur von SoftENGINE Mitarbeiter benutzt werden"
-                        bot_handler.send_reply(message, response)
-                        return
+        mail_of_sender="user43@standard.at"
+        print(self.allowed_userlist)
+        for item in self.allowed_userlist:
+            index = mail_of_sender.find(item)
+            if index != -1:
+                break
 
-        index = mail_of_sender.find("user43@support.teamzone.softengine.de") #ist daniel boos
-        if index != -1:
-            mail_of_sender = "daniel.boos@standardsw.com"
+        if index == -1:
+            response = "Sorry, ich kann nur von SoftENGINE Mitarbeiter benutzt werden"
+            bot_handler.send_reply(message, response)
+            return
 
         create_match = CREATE_REGEX.match(content)
         help_match = HELP_REGEX.match(content)
