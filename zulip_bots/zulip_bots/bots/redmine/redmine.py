@@ -9,7 +9,6 @@ import requests
 import zulip
 
 from zulip_bots.lib import BotHandler
-from zulip  import Client 
 
 
 GET_REGEX = re.compile('get "(?P<issue_key>.+)"$')
@@ -101,23 +100,22 @@ class JiraHandler:
         return response
 
     def handle_message(self, message: Dict[str, str], bot_handler: BotHandler) -> None:
-        #testcode
-        client = bot_handler._client
-        result = client.get_user_by_id(26)
-        print(result)
-        #testcode ende
+
+        client = zulip.Client(config_file="~/python-zulip-api-SE/config/redmine_rc")
+        resultuser = client.get_user_by_id(26)
+        result = resultuser.get("user")
 
         content = message.get("content")
         subject_from_Message = message.get("subject")
-        mail_of_sender = message.get("sender_email")
+        mail_of_sender = result.get("delivery_email")
+        if mail_of_sender is None:
+            mail_of_sender = "nichtbekannt"
+            
         message_id = message.get("id")
         message_type = message.get("type")
-        steam_id = message.get("steam_id")
         project_name='themen-aus-teamzone'
         backup_user_id = 6 #michael pagler
-        lines = content.splitlines()
-        content_from_second_row ="\n".join(lines[1:])
-
+ 
         response = "Sorry, Befehl nicht verstanden! Schreibe `help` danach für Befehle."
         if message_type == "private":
             response = "Aus privaten / Direktnachrichten kann ich keine Issues erzeugen"
@@ -126,8 +124,6 @@ class JiraHandler:
 
         logging.info("mail_of_sender: %s", mail_of_sender)
 
-        mail_of_sender="user43@standard.at"
-        print(self.allowed_userlist)
         for item in self.allowed_userlist:
             index = mail_of_sender.find(item)
             if index != -1:
