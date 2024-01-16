@@ -6,8 +6,11 @@ import redminelib
 import logging
 
 import requests
+import zulip
 
 from zulip_bots.lib import BotHandler
+from zulip  import Client 
+
 
 GET_REGEX = re.compile('get "(?P<issue_key>.+)"$')
 CREATE_REGEX = re.compile(
@@ -98,6 +101,12 @@ class JiraHandler:
         return response
 
     def handle_message(self, message: Dict[str, str], bot_handler: BotHandler) -> None:
+        #testcode
+        client = bot_handler._client
+        result = client.get_user_by_id(26)
+        print(result)
+        #testcode ende
+
         content = message.get("content")
         subject_from_Message = message.get("subject")
         mail_of_sender = message.get("sender_email")
