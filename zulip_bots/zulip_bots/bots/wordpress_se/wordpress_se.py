@@ -56,11 +56,15 @@ class WordpressHandler:
         #get all messages of Topic 
         message_stream_id = message.get("stream_id")
         message_subject = message.get("subject")
+        message_subject.replace(" ", "+")
         request: Dict[str, Any] = {
             "apply_markdown": False, 
+            "anchor": 0,
+            "num_before": 0,
+            "num_after": 100,
             "narrow": [
                 {"operator": "topic", "operand": f"{message_subject}"},
-                {"operator": "stream", "operand": f"{message_stream_id}"},
+                {"operator": "stream", "operand": message_stream_id},
             ],
         }
         result = self.zulipclient.get_messages(request)
@@ -68,8 +72,8 @@ class WordpressHandler:
         #todo soll ich auf leer pruefen??? was dann?
         wp_content=""
         for item in messages_from_topic:
-            wp_content += item
-            wp_content += "<br>"
+            wp_content += item.get("content")
+            wp_content += "<br><hr><br>"
         
         #create post to wordpress endpoint
         if not self.wptoken:
@@ -78,6 +82,7 @@ class WordpressHandler:
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self.wptoken}',
+            'User-Agent': 'wikibot/1.0'
         }
         json_data = {
                 "content": f"{wp_content}",
@@ -93,11 +98,13 @@ class WordpressHandler:
         bot_message = ""
         emoji_name = "tada"
         if response.status_code == 201:
-            bot_message = "Wiki ist angelegt! wiki#" + str(response.id)
+            body = response.json()
+            bot_message = "Wiki ist angelegt! wiki#" + str(body.get("id"))
         elif response.status_code == 401:
             #try to get new token
             new_token = self.request_wp_token()
             if not new_token:
+                logging.error("token missing")
                 bot_message = "Oh no! Etwas ist schief gelaufen. Bitte meinen Bot Erzeuger oder einen Administrator informieren"
                 emoji_name = "sad"
             else:
@@ -105,11 +112,16 @@ class WordpressHandler:
                 #try again
                 response = requests.post(self.endpoint, headers=headers, json=json_data)
                 if response.status_code == 201:
-                    bot_message = "Wiki ist angelegt! wiki#" + str(response.id)
+                    body = response.json()
+                    bot_message = "Wiki ist angelegt! wiki#" + str(body.get("id"))
                 else:
+                    logging.error("after token other error")
+                    logging.info("response: %s", repr(response))
                     bot_message = "Oh no! Etwas ist schief gelaufen. Bitte meinen Bot Erzeuger oder einen Administrator informieren"
                     emoji_name = "sad"
         else:
+            logging.error("other error")
+            logging.info("response: %s, text: %s", repr(response), response.text)
             bot_message = "Oh no! Etwas ist schief gelaufen. Bitte meinen Bot Erzeuger oder einen Administrator informieren"
             emoji_name = "sad"
 
