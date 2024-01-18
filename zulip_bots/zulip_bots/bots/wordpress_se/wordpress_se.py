@@ -30,19 +30,14 @@ class WordpressHandler:
     def initialize(self, bot_handler: BotHandler) -> None:
         config = bot_handler.get_config_info("wordpress")
         self.endpoint = config.get("wordpress_postendpoint")
-        self.tokenendpoint = config.get("wordpress_tokenendpoint")
-        self.user = config.get("wordpress_user")
-        self.pw = config.get("wordpress_password")
         self.rcfile = config.get("zulip_rc_file")
-        self.wptoken= config.get("wordpress_last_wp_token")
+        self.wptoken= config.get("wordpress_wptoken")
         if not self.endpoint:
             raise KeyError("No `wordpress_endpoint` was specified")
-        if not self.user:
-            raise KeyError("No `wordpress_user' was specified")
-        if not self.pw:
-            raise KeyError("No `wordpress_password` was specified")
         if not self.rcfile:
             raise KeyError("No `zulip_rc_file` was specified")
+        if not self.wptoken:
+            raise KeyError("No `qptoken` was specified")
 
         self.zulipclient = zulip.Client(config_file=self.rcfile)
 
@@ -76,9 +71,6 @@ class WordpressHandler:
             wp_content += "<br><hr><br>"
         
         #create post to wordpress endpoint
-        if not self.wptoken:
-            self.wptoken= bot_handler.storage.get("wptoken")
-
         headers = {
             'Content-Type': 'application/json',
             'Authorization': f'Bearer {self.wptoken}',
@@ -100,25 +92,6 @@ class WordpressHandler:
         if response.status_code == 201:
             body = response.json()
             bot_message = "Wiki ist angelegt! wiki#" + str(body.get("id"))
-        elif response.status_code == 401:
-            #try to get new token
-            new_token = self.request_wp_token()
-            if not new_token:
-                logging.error("token missing")
-                bot_message = "Oh no! Etwas ist schief gelaufen. Bitte meinen Bot Erzeuger oder einen Administrator informieren"
-                emoji_name = "sad"
-            else:
-                self.wptoken = new_token
-                #try again
-                response = requests.post(self.endpoint, headers=headers, json=json_data)
-                if response.status_code == 201:
-                    body = response.json()
-                    bot_message = "Wiki ist angelegt! wiki#" + str(body.get("id"))
-                else:
-                    logging.error("after token other error")
-                    logging.info("response: %s", repr(response))
-                    bot_message = "Oh no! Etwas ist schief gelaufen. Bitte meinen Bot Erzeuger oder einen Administrator informieren"
-                    emoji_name = "sad"
         else:
             logging.error("other error")
             logging.info("response: %s, text: %s", repr(response), response.text)
