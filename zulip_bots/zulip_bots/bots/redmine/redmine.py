@@ -194,7 +194,7 @@ class JiraHandler:
                 messages_from_topic = result.get("messages")
                 #todo soll ich auf leer pruefen??? was dann?
                 quote_content="\nText aus Thread:\n<pre>\n"
-                for item in messages_from_topic:
+                for item in messages_from_topic[:-1]:
                     quote_content += item.get("content")
                     quote_content += "\n-----\n"
                 quote_content+="</pre>"
