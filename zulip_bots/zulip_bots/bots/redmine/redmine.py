@@ -16,6 +16,10 @@ CREATE_REGEX = re.compile(
     'create issue\s*(?P<remaining_text>[\s\S]*)'
     "$"
 )
+CREATE_REGEX2 = re.compile(
+    'create\s*(?P<remaining_text>[\s\S]*)'
+    "$"
+)
 EDIT_REGEX = re.compile(
     'edit issue "(?P<issue_key>.+?)"'
     '( to use summary "(?P<summary>.+?)")?'
@@ -62,16 +66,21 @@ class JiraHandler:
         redmine_token = config.get("redmine_token")
         zulip_url = config.get("domain")
         allowed_users = config.get("allowed_users")
+        self.rcfile = config.get("zulip_rc_file")
         if not redmine_url:
             raise KeyError("No `redmine_url` was specified")
         if not redmine_token:
             raise KeyError("No `redmine_token` was specified")
         if not zulip_url:
             raise KeyError("No `zulip` was specified")
+        if not self.rcfile:
+            raise KeyError("No `rcfile` was specified")
 
         self.redmine = redminelib.Redmine(redmine_url, key=redmine_token)
         self.zulip_url = zulip_url
         self.allowed_userlist = allowed_users.split(',') 
+        self.zulipclient = zulip.Client(config_file=self.rcfile)
+        
 
     def jql_search(self, jql_query: str) -> str:
         unknown_val = "*unknown*"
@@ -101,7 +110,7 @@ class JiraHandler:
 
     def handle_message(self, message: Dict[str, str], bot_handler: BotHandler) -> None:
 
-        client = zulip.Client(config_file="~/python-zulip-api-SE/config/redmine_rc")
+        client = self.zulipclient
         sender_id = message.get("sender_id")
         resultuser = client.get_user_by_id(sender_id)
         result = resultuser.get("user")
@@ -136,6 +145,9 @@ class JiraHandler:
             return
 
         create_match = CREATE_REGEX.match(content)
+        if not create_match:
+            create_match = CREATE_REGEX2.match(content)
+            
         help_match = HELP_REGEX.match(content)
 
         issue_subject= "Thema von Teamzone: " + subject_from_Message
@@ -150,7 +162,7 @@ class JiraHandler:
                 logging.info("found redmine user count: %i", anzahl)
                 id=backup_user_id
                 if anzahl == 1:
-                    id = user_response[0].id
+                    #id = user_response[0].id
                     logging.info("User ID: %i", user_response[0].id)
 
                 topic_url_fragment = urllib.parse.quote(subject_from_Message)
@@ -163,7 +175,32 @@ class JiraHandler:
                 topic_url_fragment = "/topic/"+ topic_url_fragment
 
                 message_url_fragment = "/near/"+str(message_id)
-                issue_description=create_match.group("remaining_text") + "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment
+                
+                #get all messages of Topic 
+                message_stream_id = message.get("stream_id")
+                message_subject = message.get("subject")
+                message_subject.replace(" ", "+")
+                request: Dict[str, Any] = {
+                    "apply_markdown": False, 
+                    "anchor": 0,
+                    "num_before": 0,
+                    "num_after": 100,
+                    "narrow": [
+                        {"operator": "topic", "operand": f"{message_subject}"},
+                        {"operator": "stream", "operand": message_stream_id},
+                    ],
+                }
+                result = client.get_messages(request)
+                messages_from_topic = result.get("messages")
+                #todo soll ich auf leer pruefen??? was dann?
+                quote_content="\nText aus Thread:\n<pre>\n"
+                for item in messages_from_topic:
+                    quote_content += item.get("content")
+                    quote_content += "\n-----\n"
+                quote_content+="</pre>"
+                             
+                issue_description=create_match.group("remaining_text") + "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment + "\n"+quote_content
+                                
                 issue_response = self.redmine.issue.create(
                     project_id=project_name,
                     subject=issue_subject,
