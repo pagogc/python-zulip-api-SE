@@ -16,6 +16,10 @@ CREATE_REGEX = re.compile(
     'create issue\s*(?P<remaining_text>[\s\S]*)'
     "$"
 )
+NO_THREAD = re.compile(
+    '-not\s*(?P<remaining_text>[\s\S]*)'
+    "$"
+)
 CREATE_REGEX2 = re.compile(
     'create\s*(?P<remaining_text>[\s\S]*)'
     "$"
@@ -154,6 +158,11 @@ class JiraHandler:
         issue_response = ""
         if create_match:
             try:
+                no_thread= NO_THREAD.match(create_match.group("remaining_text") )
+                with_thread = True
+                if no_thread:
+                    with_thread=False
+
                 user_response = self.redmine.user.filter(
                     name=mail_of_sender
                 )
@@ -162,7 +171,7 @@ class JiraHandler:
                 logging.info("found redmine user count: %i", anzahl)
                 id=backup_user_id
                 if anzahl == 1:
-                    #id = user_response[0].id
+                    id = user_response[0].id
                     logging.info("User ID: %i", user_response[0].id)
 
                 topic_url_fragment = urllib.parse.quote(subject_from_Message)
@@ -174,7 +183,7 @@ class JiraHandler:
                 topic_url_fragment = topic_url_fragment.replace("%", ".")
                 topic_url_fragment = "/topic/"+ topic_url_fragment
 
-                message_url_fragment = "/near/"+str(message_id)
+                message_url_fragment = "/near/"+str(message_id) 
                 
                 #get all messages of Topic 
                 message_stream_id = message.get("stream_id")
@@ -193,11 +202,13 @@ class JiraHandler:
                 result = client.get_messages(request)
                 messages_from_topic = result.get("messages")
                 #todo soll ich auf leer pruefen??? was dann?
-                quote_content="\nText aus Thread:\n<pre>\n"
-                for item in messages_from_topic[:-1]:
-                    quote_content += item.get("content")
-                    quote_content += "\n-----\n"
-                quote_content+="</pre>"
+                quote_content=""
+                if not no_thread:
+                    quote_content="\nText aus Thread:\n<pre>\n"
+                    for item in messages_from_topic[:-1]:
+                        quote_content += item.get("content")
+                        quote_content += "\n-----\n"
+                    quote_content+="</pre>"
                              
                 issue_description=create_match.group("remaining_text") + "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment + "\n"+quote_content
                                 
