@@ -4,6 +4,7 @@ import urllib.parse
 from typing import Any, Dict, Optional
 import redminelib 
 import logging
+import pathlib
 
 import requests
 import zulip
@@ -17,7 +18,7 @@ CREATE_REGEX = re.compile(
     "$"
 )
 NO_THREAD = re.compile(
-    '-not\s*(?P<remaining_text>[\s\S]*)'
+    '-not\s*(?P<remaining_text2>[\s\S]*)'
     "$"
 )
 CREATE_REGEX2 = re.compile(
@@ -70,6 +71,11 @@ class JiraHandler:
         redmine_token = config.get("redmine_token")
         zulip_url = config.get("domain")
         allowed_users = config.get("allowed_users")
+
+        users_to_redirect= config.get("users_to_redirect")
+        redirect_to_redmine_userID = config.get("redirect_userid")
+        fallback_redmine_userID = config.get("fallback_userid")
+
         self.rcfile = config.get("zulip_rc_file")
         if not redmine_url:
             raise KeyError("No `redmine_url` was specified")
@@ -83,6 +89,9 @@ class JiraHandler:
         self.redmine = redminelib.Redmine(redmine_url, key=redmine_token)
         self.zulip_url = zulip_url
         self.allowed_userlist = allowed_users.split(',') 
+        self.redirect_userlist = users_to_redirect.split(',') 
+        self.redirect_userID  = redirect_to_redmine_userID  
+        self.fallback_userID = fallback_redmine_userID 
         self.zulipclient = zulip.Client(config_file=self.rcfile)
         
 
@@ -128,7 +137,7 @@ class JiraHandler:
         message_id = message.get("id")
         message_type = message.get("type")
         project_name='themen-aus-teamzone'
-        backup_user_id = 6 #michael pagler
+        backup_user_id = self.fallback_userID
  
         response = "Sorry, Befehl nicht verstanden! Schreibe `help` danach für Befehle."
         if message_type == "private":
@@ -158,10 +167,12 @@ class JiraHandler:
         issue_response = ""
         if create_match:
             try:
-                no_thread= NO_THREAD.match(create_match.group("remaining_text") )
+                remaining_text = create_match.group("remaining_text")
+                no_thread= NO_THREAD.match(remaining_text)
                 with_thread = True
                 if no_thread:
                     with_thread=False
+                    remaining_text = no_thread.group("remaining_text") 
 
                 user_response = self.redmine.user.filter(
                     name=mail_of_sender
@@ -173,6 +184,12 @@ class JiraHandler:
                 if anzahl == 1:
                     id = user_response[0].id
                     logging.info("User ID: %i", user_response[0].id)
+                    for item in self.redirect_userlist:
+                        index = mail_of_sender.find(item)
+                        if index != -1:
+                            id = self.redirect_userID
+                            logging.info("Redirect ID: %s", id) 
+                            break
 
                 topic_url_fragment = urllib.parse.quote(subject_from_Message)
                 topic_url_fragment = topic_url_fragment.replace(".", ".2E")
@@ -210,7 +227,7 @@ class JiraHandler:
                         quote_content += "\n-----\n"
                     quote_content+="</pre>"
                              
-                issue_description=create_match.group("remaining_text") + "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment + "\n"+quote_content
+                issue_description= remaining_text + "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment + "\n"+quote_content
                                 
                 issue_response = self.redmine.issue.create(
                     project_id=project_name,
