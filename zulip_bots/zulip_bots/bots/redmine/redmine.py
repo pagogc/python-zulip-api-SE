@@ -172,7 +172,7 @@ class JiraHandler:
                 with_thread = True
                 if no_thread:
                     with_thread=False
-                    remaining_text = no_thread.group("remaining_text") 
+                    remaining_text = no_thread.group("remaining_text2") 
 
                 user_response = self.redmine.user.filter(
                     name=mail_of_sender
@@ -218,9 +218,10 @@ class JiraHandler:
                 }
                 result = client.get_messages(request)
                 messages_from_topic = result.get("messages")
+
                 #todo soll ich auf leer pruefen??? was dann?
                 quote_content=""
-                if not no_thread:
+                if with_thread:
                     quote_content="\nText aus Thread:\n<pre>\n"
                     for item in messages_from_topic[:-1]:
                         quote_content += item.get("content")
