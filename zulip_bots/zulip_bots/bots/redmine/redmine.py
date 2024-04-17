@@ -147,6 +147,7 @@ class JiraHandler:
 
         logging.info("mail_of_sender: %s", mail_of_sender)
 
+        index = -1
         for item in self.allowed_userlist:
             index = mail_of_sender.find(item)
             if index != -1:

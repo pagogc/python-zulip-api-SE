@@ -6,12 +6,13 @@ import zulip
 
 from zulip_bots.lib import BotHandler
 
+import logging
 
 class HelloWorldHandler:
     def initialize(self, bot_handler: BotHandler) -> None:
-        config = bot_handler.get_config_info("redmine")
+        config = bot_handler.get_config_info("info")
         self.rcfile = config.get("zulip_rc_file")
-        self.allowed_userlist = config.get("zulip_rc_file")
+        self.allowed_userlist = config.get("allowed_users").split(',') 
         if not self.rcfile:
             raise KeyError("No `rcfile` was specified")
         self.zulipclient = zulip.Client(config_file=self.rcfile)
@@ -31,6 +32,7 @@ class HelloWorldHandler:
         mail_of_sender = result.get("delivery_email")
         if mail_of_sender is None:
             mail_of_sender = "nichtbekannt"
+        index = -1
         for item in self.allowed_userlist:
             index = mail_of_sender.find(item)
             if index != -1:
@@ -41,6 +43,7 @@ class HelloWorldHandler:
             bot_handler.send_reply(message, response)
             return
 
+        message_id = message.get("id")
         content = """
 :warning: :warning: :warning:  **Fehlende Informationen** :warning:  :warning:  :warning:  
 
@@ -50,7 +53,6 @@ Bitte prüfen Sie die notwendigen Informationen anhand des WIKI Artikels wiki#42
 """
         bot_handler.send_reply(message, content)
 
-        message_id = message.get("id")
         request: Dict[str, Any] = {
              "message_id": message_id,
              "propagate_mode": "change_all",
