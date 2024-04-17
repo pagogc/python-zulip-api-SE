@@ -54,7 +54,7 @@ Bitte prüfen Sie die notwendigen Informationen anhand des WIKI Artikels wiki#42
         request: Dict[str, Any] = {
              "message_id": message_id,
              "propagate_mode": "change_all",
-             "stream_id": 39
+             "stream_id": 46
         }
         client.update_message(request)
 
