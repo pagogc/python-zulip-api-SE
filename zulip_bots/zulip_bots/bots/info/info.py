@@ -29,6 +29,13 @@ class HelloWorldHandler:
         resultuser = client.get_user_by_id(sender_id)
         result = resultuser.get("user")
 
+        message_type = message.get("type")
+ 
+        if message_type == "private":
+            response = "In privaten / Direktnachrichten kann ich nicht benutzt werden."
+            bot_handler.send_reply(message, response)
+            return
+
         mail_of_sender = result.get("delivery_email")
         if mail_of_sender is None:
             mail_of_sender = "nichtbekannt"
