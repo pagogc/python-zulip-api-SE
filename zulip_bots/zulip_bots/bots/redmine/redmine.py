@@ -192,15 +192,6 @@ class JiraHandler:
                             logging.info("Redirect ID: %s", id) 
                             break
 
-                topic_url_fragment = urllib.parse.quote(subject_from_Message)
-                topic_url_fragment = topic_url_fragment.replace(".", ".2E")
-                topic_url_fragment = topic_url_fragment.replace("_", ".5F")
-                topic_url_fragment = topic_url_fragment.replace("-", ".2D")
-                topic_url_fragment = topic_url_fragment.replace("~", ".7E")
-                topic_url_fragment = topic_url_fragment.replace("/", ".2F")
-                topic_url_fragment = topic_url_fragment.replace("%", ".")
-                topic_url_fragment = "/topic/"+ topic_url_fragment
-
                 message_url_fragment = "/near/"+str(message_id) 
                 
                 #get all messages of Topic 
@@ -229,8 +220,7 @@ class JiraHandler:
                         quote_content += "\n-----\n"
                     quote_content+="</pre>"
                              
-                teamzone_link = "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment + "\n";
-                direct_link= "Link zum ausloesenden Post: " + self.zulip_url + "/#narrow" + message_url_fragment + "\n";
+                teamzone_link = "\n\n Teamzone Link: " + self.zulip_url + "/#narrow/stream/999/topic/bla" + message_url_fragment + "\n";
                 issue_description= remaining_text + teamzone_link + direct_link+ quote_content
                                 
                 issue_response = self.redmine.issue.create(
