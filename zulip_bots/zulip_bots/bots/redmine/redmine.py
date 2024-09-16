@@ -221,7 +221,7 @@ class JiraHandler:
                     quote_content+="</pre>"
                              
                 teamzone_link = "\n\n Teamzone Link: " + self.zulip_url + "/#narrow/stream/999/topic/bla" + message_url_fragment + "\n";
-                issue_description= remaining_text + teamzone_link + direct_link+ quote_content
+                issue_description= remaining_text + teamzone_link + quote_content
                                 
                 issue_response = self.redmine.issue.create(
                     project_id=project_name,
