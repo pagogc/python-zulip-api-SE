@@ -229,7 +229,9 @@ class JiraHandler:
                         quote_content += "\n-----\n"
                     quote_content+="</pre>"
                              
-                issue_description= remaining_text + "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment + "\n"+quote_content
+                teamzone_link = "\n\n Teamzone Link: " + self.zulip_url + "/#narrow" + topic_url_fragment + message_url_fragment + "\n";
+                direct_link= "Link zum ausloesenden Post: " + self.zulip_url + "/#narrow" + message_url_fragment + "\n";
+                issue_description= remaining_text + teamzone_link + direct_link+ quote_content
                                 
                 issue_response = self.redmine.issue.create(
                     project_id=project_name,
