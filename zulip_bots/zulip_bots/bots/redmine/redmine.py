@@ -26,17 +26,23 @@ HELP_REGEX = re.compile("help$")
 HELP_RESPONSE = """
 **create**
 
-`create` erzeugt ein Issue mit Thema als Titel und weiteren Text \
-als Beschreibung. Im Issue ist dann ein Link zur deiner Message. Beispiel:
+Erzeugt ein Issue für dieses Thema, wenn du mich erwähnst und den Befehl dazu gibst.
+Befehle in Klammern sind optional. Alles in einer Zeile.
+
+create (project "ticketsytem") (title "Mein Issue") (desc "weitere Beschreibung") (to "zuweisung an userid") (nothread)
+        
+Beispiele
+Du:
+@Issuebot create
+
+Ich:
+Issue erstellt #nummer
 
 Du:
+@Issuebot create project "ticketsystem" nothread
 
- > @**Issue Bot** create issue \
-Meine Beschreibung für dieses Issue
-
-Issue Bot:
-
- > Issue ist angelegt! #12345  
+Ich
+Issue erstellt #nummer 
 """
 
 
