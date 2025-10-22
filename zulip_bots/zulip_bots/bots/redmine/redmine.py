@@ -11,25 +11,22 @@ import zulip
 
 from zulip_bots.lib import BotHandler
 
-
 CREATE_REGEX = re.compile(
-    'create issue\s*(?P<remaining_text>[\s\S]*)'
-    "$"
-)
-NO_THREAD = re.compile(
-    '-not\s*(?P<remaining_text2>[\s\S]*)'
-    "$"
-)
-CREATE_REGEX2 = re.compile(
-    'create\s*(?P<remaining_text>[\s\S]*)'
-    "$"
+    'create'
+    '( project "(?P<project_key>.+?)")?'
+    '( title "(?P<summary>.+?)")?'
+    '( desc "(?P<description>.+?)")?'
+    '( to "(?P<assignee>.+?)")?'
+    '( (?P<nothread>nothread))?'
+    "$",
+    re.IGNORECASE | re.DOTALL
 )
 HELP_REGEX = re.compile("help$")
 
 HELP_RESPONSE = """
-**create issue**
+**create**
 
-`create issue` erzeugt ein Issue mit Thema als Titel und weiteren Text \
+`create` erzeugt ein Issue mit Thema als Titel und weiteren Text \
 als Beschreibung. Im Issue ist dann ein Link zur deiner Message. Beispiel:
 
 Du:
@@ -47,7 +44,57 @@ class RedmineHandler:
     def usage(self) -> str:
         return """
         Erzeugt ein Issue für dieses Thema, wenn du mich erwähnst und den Befehl dazu gibst.
+        Befehle in Klammern sind optional. Alles in einer Zeile.
+
+        create (project "ticketsytem") (title "Mein Issue") (desc "weitere Beschreibung") (to "zuweisung an userid") (nothread)
+        
+        Beispiele
+        Du:
+        @Issuebot create
+
+        Ich:
+        Issue erstellt #nummer
+
+        Du:
+        @Issuebot create project "ticketsystem" nothread
+
+        Ich
+        Issue erstellt #nummer 
         """
+
+    def normalize_issue_data(self, data: dict, assignee_id=None) -> dict:
+        """Map regex group names to Redmine API field names and apply defaults."""
+        mapping = {
+            "summary": "subject",
+            "project_key": "project_id",
+            "description": "description",
+            "assignee": "assigned_to_id",
+        }
+        cleaned = {k: v.strip() for k, v in data.items() if v}
+        normalized = {mapping[k]: v for k, v in cleaned.items() if k in mapping}
+
+        defaults = {
+            "project_id": self.project_name,  
+            "subject": self.issue_subject,
+            "tracker_id": 3
+        }
+        for k, v in defaults.items():
+            normalized.setdefault(k, v)
+
+        if assignee_id is not None:
+            normalized["assigned_to_id"] = assignee_id
+
+        return normalized
+
+    def create_issue(self, issue_data: dict):
+        try:
+            issue_response = self.redmine.issue.create(**issue_data)
+        except redminelib.exceptions.BaseRedmineError as exc:
+            response = "Oh no! Issuetracker hat nen Fehler geworfen:\n > " + repr(exc)
+        else:
+            response = "Issue ist angelegt! #" + str(issue_response.id)
+
+        return response
 
     def initialize(self, bot_handler: BotHandler) -> None:
         config = bot_handler.get_config_info("redmine")
@@ -87,6 +134,47 @@ class RedmineHandler:
         self.testing = testing
         self.zulipclient = zulip.Client(config_file=self.rcfile)
         
+    def get_user_from_redmine(self, mail_of_sender):
+        user_response = self.redmine.user.filter(
+            name=mail_of_sender
+        )
+
+        anzahl = len(user_response)
+        logging.info("found redmine user count: %i", anzahl)
+        id = 0
+        if anzahl == 1:
+            id = user_response[0].id
+            logging.info("User ID: %i", user_response[0].id)
+            for item in self.redirect_userlist:
+                index = mail_of_sender.find(item)
+                if index != -1:
+                    id = self.redirect_userID
+                    logging.info("Redirect ID: %s", id) 
+                    break
+
+        return id
+    
+    def get_teamzone_messages(self, message, subject):
+        #get all messages of Topic 
+        message_stream_id = message.get("stream_id")
+        message_subject = subject
+        if self.testing:
+            message_stream_id = 1
+        message_subject.replace(" ", "+")
+        request: Dict[str, Any] = {
+            "apply_markdown": False, 
+            "anchor": 0,
+            "num_before": 0,
+            "num_after": 100,
+            "narrow": [
+                {"operator": "topic", "operand": f"{message_subject}"},
+                {"operator": "stream", "operand": message_stream_id},
+            ],
+        }
+        result = self.zulipclient.get_messages(request)
+        messages_from_topic = result.get("messages")
+        return messages_from_topic
+
 
     def handle_message(self, message: Dict[str, str], bot_handler: BotHandler) -> None:
 
@@ -117,9 +205,6 @@ class RedmineHandler:
         if self.debug:
             logging.info("DEBUG: delivery_email Zulip: {}", mail_of_sender)
 
-        project_name='themen-aus-teamzone'
-        backup_user_id = self.fallback_userID
- 
         response = "Sorry, Befehl nicht verstanden! Schreibe `help` danach für Befehle."
         if message_type == "private":
             response = "Aus privaten / Direktnachrichten kann ich keine Issues erzeugen"
@@ -140,9 +225,6 @@ class RedmineHandler:
             return
 
         create_match = CREATE_REGEX.match(content)
-        if not create_match:
-            create_match = CREATE_REGEX2.match(content)
-            
         help_match = HELP_REGEX.match(content)
 
         if self.testing:
@@ -150,78 +232,40 @@ class RedmineHandler:
             subject_from_Message = "DebugMessage"
             message_id = 0
 
-        issue_subject= "Thema von Teamzone: " + subject_from_Message
-        issue_response = ""
         if create_match:
-            try:
-                remaining_text = create_match.group("remaining_text")
-                no_thread= NO_THREAD.match(remaining_text)
-                with_thread = True
-                if no_thread:
-                    with_thread=False
-                    remaining_text = no_thread.group("remaining_text2") 
+            self.issue_subject= "Thema von Teamzone: " + subject_from_Message
+            self.project_name='themen-aus-teamzone'
+            backup_user_id = self.fallback_userID
 
-                user_response = self.redmine.user.filter(
-                    name=mail_of_sender
-                )
+            data = create_match.groupdict()
 
-                anzahl = len(user_response)
-                logging.info("found redmine user count: %i", anzahl)
-                id=backup_user_id
-                if anzahl == 1:
-                    id = user_response[0].id
-                    logging.info("User ID: %i", user_response[0].id)
-                    for item in self.redirect_userlist:
-                        index = mail_of_sender.find(item)
-                        if index != -1:
-                            id = self.redirect_userID
-                            logging.info("Redirect ID: %s", id) 
-                            break
-
-                message_url_fragment = "/near/"+str(message_id) 
-                
-                #get all messages of Topic 
-                message_stream_id = message.get("stream_id")
-                message_subject = subject_from_Message
-                if self.testing:
-                    message_stream_id = 1
-                message_subject.replace(" ", "+")
-                request: Dict[str, Any] = {
-                    "apply_markdown": False, 
-                    "anchor": 0,
-                    "num_before": 0,
-                    "num_after": 100,
-                    "narrow": [
-                        {"operator": "topic", "operand": f"{message_subject}"},
-                        {"operator": "stream", "operand": message_stream_id},
-                    ],
-                }
-                result = client.get_messages(request)
-                messages_from_topic = result.get("messages")
-
-                #todo soll ich auf leer pruefen??? was dann?
-                quote_content=""
-                if with_thread:
-                    quote_content="\nText aus Thread:\n<pre>\n"
-                    for item in messages_from_topic[:-1]:
-                        quote_content += item.get("content")
-                        quote_content += "\n-----\n"
-                    quote_content+="</pre>"
-                             
-                teamzone_link = "\n\n Teamzone Link: " + self.zulip_url + "/#narrow/stream/999/topic/bla" + message_url_fragment + "\n";
-                issue_description= remaining_text + teamzone_link + quote_content
-                                
-                issue_response = self.redmine.issue.create(
-                    project_id=project_name,
-                    subject=issue_subject,
-                    description=issue_description,
-                    assigned_to_id = id,
-                    tracker_id=3
-                )
-            except redminelib.exceptions.BaseRedmineError as exc:
-                response = "Oh no! Issuetracker hat nen Fehler geworfen:\n > " + repr(exc)
+            if data.get("assignee"):
+                assignee_id = data["assignee"]
             else:
-                response = "Issue ist angelegt! #" + str(issue_response.id)
+                assignee_id = self.get_user_from_redmine(mail_of_sender)
+                if assignee_id == 0:
+                    assignee_id = backup_user_id
+
+            issue_data = self.normalize_issue_data(data, assignee_id=assignee_id)
+
+            message_url_fragment = "/near/"+str(message_id) 
+            always_text = "\n\n Teamzone Link: " + self.zulip_url + "/#narrow/stream/999/topic/bla" + message_url_fragment + "\n";
+            if "description" in issue_data:
+                issue_data["description"] += always_text
+            else:
+                issue_data["description"] = always_text.strip()
+
+            nothread_flag = bool(data.get("nothread"))
+            if not nothread_flag:
+                extra_text = self.get_teamzone_messages(message,subject_from_Message)
+                quote_content="\nText aus Thread:\n<pre>\n"
+                for item in extra_text[:-1]:
+                    quote_content += item.get("content")
+                    quote_content += "\n-----\n"
+                quote_content+="</pre>"
+                issue_data["description"] += quote_content
+
+            response = self.create_issue(issue_data)
         elif help_match:
             response = HELP_RESPONSE
 
