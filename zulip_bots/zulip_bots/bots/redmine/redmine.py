@@ -212,10 +212,9 @@ class RedmineHandler:
             logging.info("DEBUG: delivery_email Zulip: {}", mail_of_sender)
 
         response = "Sorry, Befehl nicht verstanden! Schreibe `help` danach für Befehle."
+        help_match = False;
         if message_type == "private":
-            response = "Aus privaten / Direktnachrichten kann ich keine Issues erzeugen"
-            bot_handler.send_reply(message, response)
-            return
+            help_match = True;
 
         logging.info("mail_of_sender: %s", mail_of_sender)
 
@@ -231,7 +230,8 @@ class RedmineHandler:
             return
 
         create_match = CREATE_REGEX.match(content)
-        help_match = HELP_REGEX.match(content)
+        if not help_match:
+            help_match = HELP_REGEX.match(content)
 
         if self.testing:
             content = "@**Issubot** create\nTestMessage"
