@@ -1,8 +1,10 @@
 import base64
+import io
+import mimetypes
 import re
 import urllib.parse
-from typing import Any, Dict, Optional
-import redminelib 
+from typing import Any, Dict, List, Optional, Tuple
+import redminelib
 import logging
 import pathlib
 
@@ -10,6 +12,20 @@ import requests
 import zulip
 
 from zulip_bots.lib import BotHandler
+
+DEFAULT_MAX_ATTACHMENT_MB = 95
+DOWNLOAD_TIMEOUT_SECONDS = 120
+DOWNLOAD_CHUNK_SIZE = 64 * 1024
+
+# Zulip liefert Uploads im Roh-Markdown als [dateiname](/user_uploads/...) —
+# je nach Client auch als absolute URL auf denselben Pfad.
+ATTACHMENT_REGEX = re.compile(
+    r"\[(?P<name>[^\]\n]*)\]\((?P<url>[^)\s]*/user_uploads/[^)\s]+)\)"
+)
+
+
+class AttachmentTooLargeError(Exception):
+    """Datei überschreitet das konfigurierte Limit und wird nicht hochgeladen."""
 
 CREATE_REGEX = re.compile(
     'create'
@@ -30,6 +46,10 @@ Erzeugt ein Issue für dieses Thema, wenn du mich erwähnst und den Befehl dazu 
 Befehle in Klammern sind optional. Alles in einer Zeile.
 
 create (project "ticketsytem") (title "Mein Issue") (desc "weitere Beschreibung") (to "zuweisung an userid") (nothread)
+
+Dateien aus dem Thema (Screenshots, Videos, Logs) hänge ich automatisch ans Issue an.
+Zu große Dateien verlinke ich stattdessen in der Beschreibung.
+`nothread` schaltet Thread-Text und Anhänge gemeinsam ab.
         
 Beispiele
 Du:
@@ -53,6 +73,10 @@ class RedmineHandler:
         Befehle in Klammern sind optional. Alles in einer Zeile.
 
         create (project "ticketsytem") (title "Mein Issue") (desc "weitere Beschreibung") (to "zuweisung an userid") (nothread)
+
+Dateien aus dem Thema (Screenshots, Videos, Logs) hänge ich automatisch ans Issue an.
+Zu große Dateien verlinke ich stattdessen in der Beschreibung.
+`nothread` schaltet Thread-Text und Anhänge gemeinsam ab.
         
         Beispiele
         Du:
@@ -92,13 +116,13 @@ class RedmineHandler:
 
         return normalized
 
-    def create_issue(self, issue_data: dict):
+    def create_issue(self, issue_data: dict, attachment_note: str = ""):
         try:
             issue_response = self.redmine.issue.create(**issue_data)
         except redminelib.exceptions.BaseRedmineError as exc:
             response = "Oh no! Issuetracker hat nen Fehler geworfen:\n > " + repr(exc)
         else:
-            response = "Issue ist angelegt! #" + str(issue_response.id)
+            response = "Issue ist angelegt! #" + str(issue_response.id) + attachment_note
 
         return response
 
@@ -136,10 +160,35 @@ class RedmineHandler:
         self.redirect_userlist = users_to_redirect.split(',') 
         self.redirect_userID  = redirect_to_redmine_userID  
         self.fallback_userID = fallback_redmine_userID 
-        self.debug=debug 
+        self.debug=debug
         self.testing = testing
+        self.max_attachment_mb = self.read_max_attachment_mb(config)
         self.zulipclient = zulip.Client(config_file=self.rcfile)
-        
+
+    @staticmethod
+    def read_max_attachment_mb(config) -> int:
+        """Limit für einzelne Anhänge in MB; ohne Eintrag greift der Default."""
+        raw = config.get("max_attachment_mb")
+        if raw is None or str(raw).strip() == "":
+            return DEFAULT_MAX_ATTACHMENT_MB
+        try:
+            value = int(str(raw).strip())
+        except ValueError:
+            logging.warning(
+                "max_attachment_mb ist keine Zahl (%r), nutze Default %i",
+                raw,
+                DEFAULT_MAX_ATTACHMENT_MB,
+            )
+            return DEFAULT_MAX_ATTACHMENT_MB
+        if value <= 0:
+            logging.warning(
+                "max_attachment_mb muss > 0 sein (%r), nutze Default %i",
+                raw,
+                DEFAULT_MAX_ATTACHMENT_MB,
+            )
+            return DEFAULT_MAX_ATTACHMENT_MB
+        return value
+
     def get_user_from_redmine(self, mail_of_sender):
         user_response = self.redmine.user.filter(
             name=mail_of_sender
@@ -181,6 +230,153 @@ class RedmineHandler:
         messages_from_topic = result.get("messages")
         return messages_from_topic
 
+    def zulip_site_root(self) -> str:
+        """Basis-URL der Zulip-Instanz ohne den /api/-Suffix des Clients."""
+        base_url = self.zulipclient.base_url
+        if base_url.endswith("api/"):
+            base_url = base_url[: -len("api/")]
+        return base_url.rstrip("/")
+
+    def absolute_zulip_url(self, url: str) -> str:
+        if url.startswith("http://") or url.startswith("https://"):
+            return url
+        return self.zulip_site_root() + "/" + url.lstrip("/")
+
+    def collect_attachment_links(self, messages) -> List[Dict[str, str]]:
+        """Sammelt alle Zulip-Uploads aus den Nachrichten eines Topics.
+
+        Erwartet den Roh-Markdown der Nachrichten (`apply_markdown: False`).
+        Mehrfach verlinkte Dateien tauchen nur einmal auf, die Reihenfolge im
+        Thread bleibt erhalten.
+        """
+        links: List[Dict[str, str]] = []
+        seen = set()
+        for message in messages or []:
+            content = message.get("content") or ""
+            for match in ATTACHMENT_REGEX.finditer(content):
+                url = match.group("url")
+                if url in seen:
+                    continue
+                seen.add(url)
+                links.append({"filename": self.filename_for_link(match), "url": url})
+        return links
+
+    @staticmethod
+    def filename_for_link(match) -> str:
+        """Dateiname aus dem Linktext, ersatzweise aus dem letzten Pfadsegment."""
+        name = (match.group("name") or "").strip()
+        if not name:
+            path = urllib.parse.urlsplit(match.group("url")).path
+            name = urllib.parse.unquote(pathlib.PurePosixPath(path).name)
+        return name or "anhang"
+
+    def download_zulip_file(self, url: str) -> Tuple[bytes, Optional[str]]:
+        """Lädt einen Zulip-Upload; bricht ab, sobald das Limit überschritten ist."""
+        max_bytes = self.max_attachment_mb * 1024 * 1024
+        auth = requests.auth.HTTPBasicAuth(
+            self.zulipclient.email, self.zulipclient.api_key
+        )
+        response = requests.get(
+            self.absolute_zulip_url(url),
+            auth=auth,
+            stream=True,
+            timeout=DOWNLOAD_TIMEOUT_SECONDS,
+        )
+        try:
+            response.raise_for_status()
+
+            announced_size = response.headers.get("Content-Length")
+            if announced_size and announced_size.isdigit() and int(announced_size) > max_bytes:
+                raise AttachmentTooLargeError(announced_size)
+
+            buffer = io.BytesIO()
+            size = 0
+            for chunk in response.iter_content(DOWNLOAD_CHUNK_SIZE):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise AttachmentTooLargeError(str(size))
+                buffer.write(chunk)
+
+            content_type = response.headers.get("Content-Type")
+        finally:
+            response.close()
+
+        return buffer.getvalue(), content_type
+
+    def build_uploads(self, links) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+        """Lädt die Dateien und holt Redmine-Tokens dafür.
+
+        Die Tokens werden vor `issue.create` besorgt, damit eine einzelne kaputte
+        oder zu große Datei nicht die Anlage des Issues verhindert.
+        """
+        uploads: List[Dict[str, str]] = []
+        skipped: List[Dict[str, str]] = []
+
+        for link in links:
+            filename = link["filename"]
+            try:
+                content, content_type = self.download_zulip_file(link["url"])
+            except AttachmentTooLargeError:
+                logging.warning("Anhang zu groß, übersprungen: %s", filename)
+                skipped.append(
+                    dict(link, reason=f"größer als {self.max_attachment_mb} MB")
+                )
+                continue
+            except Exception as exc:
+                logging.warning("Download fehlgeschlagen für %s: %r", filename, exc)
+                skipped.append(dict(link, reason="Download aus Zulip fehlgeschlagen"))
+                continue
+
+            if not content:
+                logging.warning("Anhang ist leer, übersprungen: %s", filename)
+                skipped.append(dict(link, reason="Datei ist leer"))
+                continue
+
+            if not content_type:
+                content_type = mimetypes.guess_type(filename)[0]
+
+            try:
+                token = self.redmine.upload(io.BytesIO(content), filename=filename)["token"]
+            except Exception as exc:
+                logging.warning("Upload nach Redmine fehlgeschlagen für %s: %r", filename, exc)
+                skipped.append(dict(link, reason="Upload nach Redmine fehlgeschlagen"))
+                continue
+
+            upload = {"token": token, "filename": filename}
+            if content_type:
+                upload["content_type"] = content_type
+            uploads.append(upload)
+
+        return uploads, skipped
+
+    def format_skipped_attachments(self, skipped) -> str:
+        """Abschnitt für die Issue-Beschreibung mit den nicht übernommenen Dateien."""
+        if not skipped:
+            return ""
+        # Bewusst nur Klartext mit nackter URL: funktioniert in Redmine sowohl
+        # mit Textile- als auch mit Markdown-Formatierung.
+        lines = ["\n\nNicht übernommene Anhänge:\n"]
+        for item in skipped:
+            lines.append(
+                "* {} ({}): {}\n".format(
+                    item["filename"], item["reason"], self.absolute_zulip_url(item["url"])
+                )
+            )
+        return "".join(lines)
+
+    @staticmethod
+    def format_attachment_note(uploads, skipped) -> str:
+        """Zusatz für die Bot-Antwort; leer, wenn es keine Anhänge gab."""
+        parts = []
+        if uploads:
+            noun = "Anhang" if len(uploads) == 1 else "Anhänge"
+            parts.append(f"{len(uploads)} {noun} übernommen")
+        if skipped:
+            noun = "Anhang" if len(skipped) == 1 else "Anhänge"
+            parts.append(f"{len(skipped)} {noun} übersprungen")
+        if not parts:
+            return ""
+        return " (" + ", ".join(parts) + ")"
 
     def handle_message(self, message: Dict[str, str], bot_handler: BotHandler) -> None:
 
@@ -261,9 +457,11 @@ class RedmineHandler:
             else:
                 issue_data["description"] = always_text.strip()
 
+            uploads = []
+            skipped = []
             nothread_flag = bool(data.get("nothread"))
             if not nothread_flag:
-                extra_text = self.get_teamzone_messages(message,subject_from_Message)
+                extra_text = self.get_teamzone_messages(message,subject_from_Message) or []
                 quote_content="\nText aus Thread:\n<pre>\n"
                 for item in extra_text[:-1]:
                     quote_content += item.get("content")
@@ -271,7 +469,18 @@ class RedmineHandler:
                 quote_content+="</pre>"
                 issue_data["description"] += quote_content
 
-            response = self.create_issue(issue_data)
+                # Anhänge des gesamten Threads inklusive der create-Nachricht.
+                attachment_links = self.collect_attachment_links(extra_text)
+                if self.debug:
+                    logging.info("DEBUG: Anhänge im Thread gefunden: %i", len(attachment_links))
+                uploads, skipped = self.build_uploads(attachment_links)
+                if uploads:
+                    issue_data["uploads"] = uploads
+                issue_data["description"] += self.format_skipped_attachments(skipped)
+
+            response = self.create_issue(
+                issue_data, self.format_attachment_note(uploads, skipped)
+            )
         elif help_match:
             response = HELP_RESPONSE
 
